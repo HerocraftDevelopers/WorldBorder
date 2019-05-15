@@ -3,7 +3,9 @@ package com.wimbli.WorldBorder;
 import java.util.concurrent.CompletableFuture;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 import org.bukkit.Bukkit;
@@ -62,47 +64,10 @@ public class WorldFillTask implements Runnable
 	// A map that holds to-be-loaded chunks, and their coordinates
 	private transient Map<CompletableFuture<Chunk>, CoordXZ> pendingChunks;
 	
-	// and a set of "Chunk a needed for Chunk b" dependencies, which
-	// unfortunately can't be a Map as a chunk might be needed for
-	// several others.
-	private transient Set<UnloadDependency> preventUnload;
-	
-	private class UnloadDependency
-	{
-		int neededX, neededZ;
-		int forX, forZ;
-		
-		UnloadDependency(int neededX, int neededZ, int forX, int forZ)
-		{
-			this.neededX=neededX;
-			this.neededZ=neededZ;
-			this.forX=forX;
-			this.forZ=forZ;
-		}
-		
-		@Override
-		public boolean equals(Object other)
-		{
-			if (other == null || !(other instanceof UnloadDependency))
-				return false;
-
-			return this.neededX == ((UnloadDependency) other).neededX
-			   &&  this.neededZ == ((UnloadDependency) other).neededZ
-			   &&  this.forX    == ((UnloadDependency) other).forX
-			   &&  this.forZ    == ((UnloadDependency) other).forZ;
-		}
-
-		@Override
-		public int hashCode()
-		{
-			int hash = 7;
-			hash = 79 * hash + this.neededX;
-			hash = 79 * hash + this.neededZ;
-			hash = 79 * hash + this.forX;
-			hash = 79 * hash + this.forZ;
-			return hash;
-		}
-	}
+	// and a map of "Chunk a needed for Chunk b" dependencies, where
+	// the key is the chunk that should not be unloaded and the
+	// value is a list of chunks that require the key chunk.
+	private transient Map<CoordXZ, Set<CoordXZ>> preventUnload;
 
 	public WorldFillTask(Server theServer, Player player, String worldName, int fillDistance, int chunksPerRun, int tickFrequency, boolean forceLoad)
 	{
@@ -141,7 +106,7 @@ public class WorldFillTask implements Runnable
 		}
 		
 		pendingChunks = new HashMap<>();
-		preventUnload = new HashSet<>();
+		preventUnload = new HashMap<>();
 
 		this.border.setRadiusX(border.getRadiusX() + fillDistance);
 		this.border.setRadiusZ(border.getRadiusZ() + fillDistance);
@@ -228,15 +193,27 @@ public class WorldFillTask implements Runnable
 
 		// Next, check which chunks had been loaded because a to-be-generated
 		// chunk needed them, and don't have to remain in memory any more.
-		Set<UnloadDependency> newPreventUnload = new HashSet<>();
-		for (UnloadDependency dependency: preventUnload) 
+		Iterator<Entry<CoordXZ, Set<CoordXZ>>> it = preventUnload.entrySet().iterator();
+		while (it.hasNext())
 		{
-			if (worldData.doesChunkExist(dependency.forX, dependency.forZ)) 
-				chunksToUnload.add(new CoordXZ(dependency.neededX, dependency.neededZ));
-			else
-				newPreventUnload.add(dependency);
+			Entry<CoordXZ, Set<CoordXZ>> e = it.next();
+			Set<CoordXZ> requiredBy = e.getValue();
+			Iterator<CoordXZ> requiredByIterator = requiredBy.iterator();
+			while (requiredByIterator.hasNext())
+			{
+				CoordXZ coord = requiredByIterator.next();
+				if (worldData.doesChunkExist(coord.x, coord.z))
+				{
+					requiredByIterator.remove();
+				}
+			}
+			if (requiredBy.isEmpty())
+			{
+				chunksToUnload.add(new CoordXZ(e.getKey().x, e.getKey().z));
+				world.getChunkAt(e.getKey().x, e.getKey().z).setForceLoaded(false);
+				it.remove();
+			}
 		}
-		preventUnload = newPreventUnload;
 
 		// Unload all chunks that aren't needed anymore. NB a chunk could have
 		// been needed for two different others, or been generated and needed
@@ -320,11 +297,11 @@ public class WorldFillTask implements Runnable
 			int popZ = isZLeg ? z : (z + (!isNeg ? -1 : 1));
 
 			pendingChunks.put(PaperLib.getChunkAtAsync(world, popX, popZ, false), new CoordXZ(popX, popZ));
-			preventUnload.add(new UnloadDependency(popX, popZ, x, z));
+			addUnloadDependency(popX, popZ, x, z);
 			
 			// make sure the previous chunk in our spiral is loaded as well (might have already existed and been skipped over)
 			pendingChunks.put(PaperLib.getChunkAtAsync(world, lastChunk.x, lastChunk.z, false), new CoordXZ(lastChunk.x, lastChunk.z)); // <-- new CoordXZ as lastChunk isn't immutable
-			preventUnload.add(new UnloadDependency(lastChunk.x, lastChunk.z, x, z));
+			addUnloadDependency(lastChunk.x, lastChunk.z, x, z);
 
 			// move on to next chunk
 			if (!moveToNext())
@@ -332,6 +309,23 @@ public class WorldFillTask implements Runnable
 		}
 		// ready for the next iteration to run
 		readyToGo = true;
+	}
+
+	private void addUnloadDependency(int requiredChunkX, int requiredChunkZ, int requiredByChunkX, int requiredByChunkZ)
+	{
+		CoordXZ required = new CoordXZ(requiredChunkX, requiredChunkZ);
+		CoordXZ requiredBy = new CoordXZ(requiredByChunkX, requiredByChunkZ);
+		Set<CoordXZ> dependencies = preventUnload.get(required);
+		if (dependencies == null)
+		{
+			dependencies = new HashSet<>();
+			preventUnload.put(required, dependencies);
+			if (world.isChunkLoaded(requiredChunkX, requiredChunkZ))
+			{
+				world.getChunkAt(requiredChunkX, requiredChunkZ).setForceLoaded(true);
+			}
+		}
+		dependencies.add(requiredBy);
 	}
 
 	// step through chunks in spiral pattern from center; returns false if we're done, otherwise returns true
@@ -439,11 +433,14 @@ public class WorldFillTask implements Runnable
 		// go ahead and unload any chunks we still have loaded
 		// Set preventUnload to emptry first so the ChunkUnloadEvent Listener
 		// doesn't get in our way
-		Set<UnloadDependency> tempPreventUnload = preventUnload;
-		preventUnload = null;
-		for (UnloadDependency entry: tempPreventUnload)
+		if (preventUnload != null)
 		{
-			world.unloadChunkRequest(entry.neededX, entry.neededZ);
+			for (CoordXZ entry : preventUnload.keySet())
+			{
+				world.getChunkAt(entry.x, entry.z).setForceLoaded(false);
+				world.unloadChunkRequest(entry.x, entry.z);
+			}
+			preventUnload = null;
 		}
 	}
 
@@ -484,11 +481,7 @@ public class WorldFillTask implements Runnable
 	{
 		if (preventUnload != null)
 		{
-			for (UnloadDependency entry: preventUnload)
-			{
-				if (entry.neededX == x && entry.neededZ == z)
-					return true;
-			}
+			return preventUnload.containsKey(new CoordXZ(x, z));
 		}
 		return false;
 	}

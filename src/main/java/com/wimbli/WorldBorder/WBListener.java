@@ -1,14 +1,13 @@
 package com.wimbli.WorldBorder;
 
-import org.bukkit.Chunk;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.Chunk;
 import org.bukkit.Location;
-import org.bukkit.event.world.ChunkUnloadEvent;
 
 
 public class WBListener implements Listener
@@ -77,15 +76,14 @@ public class WBListener implements Listener
 	 * kept in memory because generation still needs it.
 	 */
 	@EventHandler
-	public void onChunkUnload(ChunkUnloadEvent e)
+	public void onChunkLoadWorldFill(ChunkLoadEvent e)
 	{
-		if (Config.fillTask!=null)
+		if (Config.fillTask != null)
 		{
-			Chunk chunk=e.getChunk();
-			if (e.getWorld() == Config.fillTask.getWorld() 
-			&&  Config.fillTask.chunkOnUnloadPreventionList(chunk.getX(), chunk.getZ()))
+			Chunk chunk = e.getChunk();
+			if (e.getWorld() == Config.fillTask.getWorld() && Config.fillTask.chunkOnUnloadPreventionList(chunk.getX(), chunk.getZ()))
 			{
-				e.setCancelled(true);
+				e.getChunk().setForceLoaded(true);
 			}
 		}
 	}
