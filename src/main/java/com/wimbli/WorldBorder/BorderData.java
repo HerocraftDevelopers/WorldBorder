@@ -1,7 +1,7 @@
 package com.wimbli.WorldBorder;
 
-import java.util.EnumSet;
-
+import java.util.HashSet;
+import java.util.Set;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -291,7 +291,7 @@ public class BorderData
 	}
 
 	//these material IDs are acceptable for places to teleport player; breathable blocks and water
-	public static final EnumSet<Material> safeOpenBlocks = EnumSet.noneOf(Material.class);
+	public static final Set<Material> safeOpenBlocks = new HashSet<>();
 	static
 	{
 		safeOpenBlocks.add(Material.AIR);
@@ -393,7 +393,7 @@ public class BorderData
 	}
 
 	//these material IDs are ones we don't want to drop the player onto, like cactus or lava or fire or activated Ender portal
-	public static final EnumSet<Material> painfulBlocks = EnumSet.noneOf(Material.class);
+	public static final Set<Material> painfulBlocks = new HashSet<>();
 	static
 	{
 		painfulBlocks.add(Material.LAVA);
